@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TicketDhaka: tickets for events in and around Dhaka</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --line:#262b36; --text:#e8eaf0; --muted:#8b93a7;
+          --avail:#2f855a; --held:#d69e2e; --booked:#4a5568; --mine:#3182ce; --accent:#5b8cff; --bad:#e05d5d; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--text); }
+  header { padding:18px 28px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap; }
+  h1 { margin:0; font-size:20px; letter-spacing:.2px; } h1 span { color:var(--accent); }
+  .sub { color:var(--muted); font-size:13px; }
+  .nav { display:flex; align-items:center; gap:14px; flex-wrap:wrap; font-size:14px; }
+  .user { display:flex; align-items:center; gap:10px; }
+  .avatar { width:30px; height:30px; border-radius:50%; background:#2a3350; display:grid; place-items:center; font-weight:600; font-size:13px; }
+  .badge { font-size:11px; padding:2px 8px; border-radius:99px; background:#222734; color:var(--muted); text-transform:capitalize; }
+  .badge.admin { background:#3b2a5c; color:#c9b2ff; } .badge.organizer { background:#1d3b2c; color:#7ee2a8; }
+  main { display:grid; grid-template-columns: 300px 1fr; gap:20px; padding:20px 28px; }
+  @media (max-width: 860px) { main { grid-template-columns:1fr; } }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; }
+  .panel h2 { margin:0 0 10px; font-size:14px; text-transform:uppercase; letter-spacing:.8px; color:var(--muted); }
+  input, button { font:inherit; }
+  input { width:100%; padding:9px 11px; margin:4px 0 10px; border-radius:6px; border:1px solid var(--line); background:#0c0e12; color:var(--text); }
+  input:focus { outline:none; border-color:var(--accent); }
+  label { font-size:13px; color:var(--muted); }
+  button { padding:8px 14px; border-radius:6px; border:1px solid var(--line); background:#222734; color:var(--text); cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.link { background:none; border:none; color:var(--accent); padding:0; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  a { color:var(--accent); }
+  .row { display:flex; gap:8px; }
+  .filters input { margin:0 0 10px; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; }
+  .chip { font-size:12px; padding:4px 10px; border-radius:99px; border:1px solid var(--line); background:#11141a; color:var(--muted); text-transform:capitalize; }
+  .chip.on { background:var(--accent); border-color:var(--accent); color:#fff; }
+  select { font:inherit; width:100%; padding:8px 10px; margin-bottom:12px; border-radius:6px; border:1px solid var(--line); background:#0c0e12; color:var(--text); }
+  #events { max-height:62vh; overflow-y:auto; padding-right:2px; }
+  .event { padding:10px; border-radius:8px; border:1px solid var(--line); margin-bottom:8px; cursor:pointer; }
+  .event .meta { display:flex; justify-content:space-between; gap:8px; margin-top:4px; font-size:12px; color:var(--muted); }
+  .cat { font-size:11px; padding:1px 7px; border-radius:99px; background:#222734; color:#c9d3ff; text-transform:capitalize; margin-left:4px; }
+  .sold { color:var(--bad); }
+  #eventInfo { color:var(--muted); font-size:13px; margin:-4px 0 12px; }
+  .event.active { border-color:var(--accent); background:#1b2030; }
+  .event b { display:block; } .event small { color:var(--muted); }
+  .stage { text-align:center; color:var(--muted); font-size:12px; letter-spacing:3px; border-top:3px solid var(--line); padding-top:6px; margin:6px auto 18px; max-width:520px; }
+  .grid { display:grid; gap:6px; justify-content:center; }
+  .seat { width:38px; height:32px; border-radius:6px 6px 3px 3px; border:none; font-size:11px; color:#fff; padding:0; }
+  .seat.available { background:var(--avail); } .seat.held { background:var(--held); cursor:not-allowed; }
+  .seat.booked { background:var(--booked); cursor:not-allowed; } .seat.mine { background:var(--mine); outline:2px solid #fff; }
+  .legend { display:flex; gap:14px; justify-content:center; margin-top:14px; color:var(--muted); font-size:12px; flex-wrap:wrap; }
+  .legend i { display:inline-block; width:12px; height:12px; border-radius:3px; margin-right:5px; vertical-align:-1px; }
+  .booking { display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid var(--line); gap:8px; }
+  .tag { font-size:11px; padding:2px 7px; border-radius:99px; background:#222734; color:var(--muted); }
+  .tag.confirmed { background:#1d3b2c; color:#7ee2a8; } .tag.held { background:#3d3015; color:#f6d27a; }
+  .cta { text-align:center; padding:6px 0; } .cta p { color:var(--muted); margin:0 0 10px; font-size:14px; }
+
+  /* auth dialog */
+  .overlay { position:fixed; inset:0; background:rgba(5,6,10,.7); display:none; align-items:center; justify-content:center; z-index:10; padding:16px; }
+  .overlay.open { display:flex; }
+  .dialog { width:100%; max-width:380px; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:22px; position:relative; }
+  .dialog h3 { margin:0 0 4px; font-size:18px; }
+  .tabs { display:flex; gap:4px; background:#0c0e12; border:1px solid var(--line); border-radius:8px; padding:3px; margin:14px 0 16px; }
+  .tabs button { flex:1; border:none; background:none; color:var(--muted); padding:7px; border-radius:6px; }
+  .tabs button.active { background:#222734; color:var(--text); }
+  .close { position:absolute; top:12px; right:12px; background:none; border:none; color:var(--muted); font-size:20px; padding:4px 8px; }
+  .error { color:var(--bad); font-size:13px; min-height:18px; margin:-2px 0 8px; }
+  .demo { margin-top:14px; padding-top:14px; border-top:1px solid var(--line); text-align:center; font-size:13px; color:var(--muted); }
+  .full { width:100%; }
+  #toast { position:fixed; bottom:20px; right:20px; background:#222734; border:1px solid var(--line); padding:10px 14px; border-radius:8px; opacity:0; transition:.2s; z-index:20; }
+  #toast.show { opacity:1; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Ticket<span>Dhaka</span></h1>
+    <div class="sub">Concerts, tech, sports, food, theatre and more, in and around Dhaka · no double-booking, ever</div>
+  </div>
+  <div class="nav">
+    <a href="/docs">API docs</a>
+    <span id="authArea"></span>
+  </div>
+</header>
+
+<main>
+  <div>
+    <div class="panel">
+      <h2>Events</h2>
+      <div class="filters">
+        <input id="search" type="search" placeholder="Search events, venues, areas…" oninput="debouncedLoad()" />
+        <div class="chips" id="chips"></div>
+        <select id="area" onchange="loadEvents(true)"><option value="">All areas in & around Dhaka</option></select>
+      </div>
+      <div id="events"></div>
+    </div>
+    <div class="panel" style="margin-top:16px">
+      <h2>My bookings</h2>
+      <div id="bookings"></div>
+    </div>
+  </div>
+  <div class="panel">
+    <h2 id="eventTitle">Pick an event</h2>
+    <div id="eventInfo"></div>
+    <div class="stage">STAGE</div>
+    <div id="seats" class="grid"></div>
+    <div class="legend">
+      <span><i style="background:var(--avail)"></i>available</span>
+      <span><i style="background:var(--held)"></i>held (5 min)</span>
+      <span><i style="background:var(--booked)"></i>booked</span>
+      <span><i style="background:var(--mine)"></i>yours</span>
+    </div>
+    <p class="sub" style="text-align:center;margin-top:16px">Open this page in two tabs and grab the same seat: only one of you gets it, and the other tab updates live.</p>
+  </div>
+</main>
+
+<div class="overlay" id="authOverlay" onclick="if (event.target === this) closeAuth()">
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+    <button class="close" onclick="closeAuth()" aria-label="Close">×</button>
+    <h3 id="authTitle">Welcome to TicketDhaka</h3>
+    <div class="sub">Sign in to hold and book seats.</div>
+    <div class="tabs">
+      <button id="tabLogin" class="active" onclick="switchTab('login')">Log in</button>
+      <button id="tabSignup" onclick="switchTab('signup')">Sign up</button>
+    </div>
+    <form id="authForm" onsubmit="submitAuth(event)">
+      <div id="nameField" style="display:none">
+        <label for="name">Name</label>
+        <input id="name" autocomplete="name" placeholder="Your name" />
+      </div>
+      <label for="email">Email</label>
+      <input id="email" type="email" autocomplete="email" placeholder="you@example.com" required />
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password" placeholder="At least 8 characters" required minlength="8" />
+      <div class="error" id="authError"></div>
+      <button class="primary full" id="authSubmit" type="submit">Log in</button>
+    </form>
+    <div class="demo">
+      Just looking around? <button class="link" onclick="useDemo()">Use the demo account</button>
+    </div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+let access = localStorage.getItem("sl_access");
+let refreshTok = localStorage.getItem("sl_refresh");
+let me = null, mode = "login", pendingSeat = null;
+let currentEvent = null, ws = null, myHeldSeats = new Set();
+localStorage.removeItem("sl_token"); // token key from the old version
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("show"), 2800); }
+
+// ---- API helper: attaches the token and transparently refreshes an expired one once ----
+async function api(path, opts = {}, retry = true) {
+  const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
+  if (access) headers.Authorization = "Bearer " + access;
+  const res = await fetch(path, { ...opts, headers });
+  if (res.status === 401 && retry && refreshTok && !path.startsWith("/auth/")) {
+    if (await tryRefresh()) return api(path, opts, false);
+    logout(true);
+  }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const d = body.detail;
+    throw new Error(typeof d === "string" ? d : Array.isArray(d) ? d.map((x) => x.msg).join(", ") : "Request failed (" + res.status + ")");
+  }
+  return body;
+}
+
+async function tryRefresh() {
+  try {
+    const r = await fetch("/auth/refresh", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ refresh_token: refreshTok }) });
+    if (!r.ok) return false;
+    const t = await r.json();
+    saveTokens(t);
+    return true;
+  } catch { return false; }
+}
+
+function saveTokens(t) {
+  access = t.access_token; refreshTok = t.refresh_token;
+  localStorage.setItem("sl_access", access); localStorage.setItem("sl_refresh", refreshTok);
+}
+
+// ---- auth UI ----
+function renderAuthArea() {
+  const area = $("authArea");
+  if (!me) {
+    area.innerHTML = `<span class="row"><button onclick="openAuth('login')">Log in</button><button class="primary" onclick="openAuth('signup')">Sign up</button></span>`;
+    return;
+  }
+  const initial = esc((me.name || me.email)[0].toUpperCase());
+  area.innerHTML = `<span class="user">
+      <span class="avatar">${initial}</span>
+      <span>${esc(me.name)} <span class="badge ${esc(me.role)}">${esc(me.role)}</span></span>
+      ${me.role === "admin" ? `<a href="/admin">Admin dashboard</a>` : ""}
+      <button onclick="logout()">Log out</button>
+    </span>`;
+}
+
+function openAuth(tab = "login") {
+  switchTab(tab);
+  $("authError").textContent = "";
+  $("authOverlay").classList.add("open");
+  setTimeout(() => (tab === "signup" ? $("name") : $("email")).focus(), 50);
+}
+function closeAuth() { $("authOverlay").classList.remove("open"); pendingSeat = null; }
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeAuth(); });
+
+function switchTab(tab) {
+  mode = tab;
+  $("tabLogin").classList.toggle("active", tab === "login");
+  $("tabSignup").classList.toggle("active", tab === "signup");
+  $("nameField").style.display = tab === "signup" ? "block" : "none";
+  $("authSubmit").textContent = tab === "signup" ? "Create account" : "Log in";
+  $("password").autocomplete = tab === "signup" ? "new-password" : "current-password";
+  $("authError").textContent = "";
+}
+
+async function submitAuth(e) {
+  e.preventDefault();
+  const btn = $("authSubmit");
+  btn.disabled = true;
+  $("authError").textContent = "";
+  try {
+    const payload = { email: $("email").value.trim(), password: $("password").value };
+    if (mode === "signup") payload.name = $("name").value.trim() || payload.email.split("@")[0];
+    const t = await api(mode === "signup" ? "/auth/register" : "/auth/login", { method: "POST", body: JSON.stringify(payload) });
+    saveTokens(t);
+    await loadMe();
+    const seat = pendingSeat;
+    $("authOverlay").classList.remove("open");
+    $("password").value = "";
+    toast(mode === "signup" ? `Welcome, ${me.name}! Pick a seat.` : `Welcome back, ${me.name}`);
+    if (currentEvent) await loadSeats();
+    if (seat) hold(seat);
+    pendingSeat = null;
+  } catch (err) {
+    $("authError").textContent = err.message;
+  } finally { btn.disabled = false; }
+}
+
+function useDemo() {
+  switchTab("login");
+  $("email").value = "demo@ticketdhaka.dev";
+  $("password").value = "demo12345";
+  $("authForm").requestSubmit();
+}
+
+async function loadMe() {
+  if (!access) { me = null; renderAuthArea(); loadBookings(); return; }
+  try { me = await api("/auth/me"); } catch { me = null; }
+  renderAuthArea();
+  loadBookings();
+}
+
+function logout(expired = false) {
+  access = refreshTok = null; me = null;
+  localStorage.removeItem("sl_access"); localStorage.removeItem("sl_refresh");
+  myHeldSeats = new Set();
+  renderAuthArea(); loadBookings();
+  if (currentEvent) loadSeats();
+  toast(expired ? "Session expired, please log in again" : "Logged out");
+}
+
+// ---- events and seats ----
+const ICON = { music: "🎵", tech: "💻", sports: "⚽", food: "🍛", theatre: "🎭", comedy: "😂", workshop: "🛠️", festival: "🎉", other: "📍" };
+let activeCat = "";
+const fmtDate = (iso) => new Date(iso).toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+const fmtPrice = (c) => (c == null ? "" : c === 0 ? "Free" : "from ৳" + (c / 100).toLocaleString());
+
+async function loadMeta() {
+  const meta = await api("/events/meta");
+  $("chips").innerHTML = ["", ...meta.categories].map((c) =>
+    `<button class="chip ${c === activeCat ? "on" : ""}" onclick="setCat('${c}')">${c ? ICON[c] + " " + c : "All"}</button>`).join("");
+  const cur = $("area").value;
+  $("area").innerHTML = `<option value="">All areas in & around Dhaka</option>` +
+    meta.areas.map((a) => `<option ${a === cur ? "selected" : ""}>${esc(a)}</option>`).join("");
+}
+function setCat(c) { activeCat = c; loadMeta(); loadEvents(true); }
+let _deb;
+function debouncedLoad() { clearTimeout(_deb); _deb = setTimeout(() => loadEvents(true), 250); }
+
+async function loadEvents(filtersChanged = false) {
+  const params = new URLSearchParams({ limit: "50" });
+  if (activeCat) params.set("category", activeCat);
+  if ($("area").value) params.set("area", $("area").value);
+  if ($("search").value.trim()) params.set("q", $("search").value.trim());
+  const page = await api("/events?" + params);
+  $("events").innerHTML = "";
+  page.items.forEach((e) => {
+    const d = document.createElement("div");
+    d.className = "event" + (currentEvent && currentEvent.id === e.id ? " active" : "");
+    d.dataset.id = e.id;
+    const left = e.available_seats === 0 ? `<span class="sold">Sold out</span>` : `${e.available_seats}/${e.total_seats} left`;
+    d.innerHTML = `<b>${ICON[e.category] || "📍"} ${esc(e.title)}</b>
+      <small>${esc(e.venue)}, ${esc(e.area)}<span class="cat">${esc(e.category)}</span></small>
+      <div class="meta"><span>${fmtDate(e.starts_at)}</span><span>${fmtPrice(e.price_from_cents)} · ${left}</span></div>`;
+    d.onclick = () => selectEvent(e);
+    $("events").appendChild(d);
+  });
+  if (!page.items.length) {
+    $("events").innerHTML = `<div class="sub">No upcoming events match. Try another category or area.</div>`;
+    return;
+  }
+  if (!currentEvent || (filtersChanged && !page.items.some((e) => e.id === currentEvent.id))) selectEvent(page.items[0]);
+  else currentEvent = page.items.find((e) => e.id === currentEvent.id) || currentEvent;
+}
+
+function selectEvent(e) {
+  currentEvent = e; $("eventTitle").textContent = e.title;
+  $("eventInfo").textContent = `${e.venue}, ${e.area} · ${fmtDate(e.starts_at)} · ${fmtPrice(e.price_from_cents)}`;
+  document.querySelectorAll(".event").forEach((n) => n.classList.toggle("active", Number(n.dataset.id) === e.id));
+  loadSeats();
+  if (ws) ws.close();
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${proto}://${location.host}/ws/events/${e.id}`);
+  ws.onmessage = () => { loadSeats(); loadEvents(); loadBookings(); };
+}
+setInterval(() => ws && ws.readyState === 1 && ws.send("ping"), 25000);
+
+async function loadSeats() {
+  const seats = await api(`/events/${currentEvent.id}/seats`);
+  const perRow = seats.filter((s) => s.label.startsWith(seats[0]?.label[0] || "A")).length || 10;
+  const grid = $("seats"); grid.style.gridTemplateColumns = `repeat(${perRow}, 38px)`; grid.innerHTML = "";
+  seats.forEach((s) => {
+    const b = document.createElement("button");
+    const mine = myHeldSeats.has(s.id);
+    b.className = "seat " + s.status + (mine ? " mine" : "");
+    b.textContent = s.label; b.title = `${s.label} · ৳${(s.price_cents / 100).toFixed(0)} · ${mine ? "yours" : s.status}`;
+    b.disabled = s.status !== "available";
+    b.onclick = () => hold(s);
+    grid.appendChild(b);
+  });
+}
+
+async function hold(seat) {
+  if (!me) { pendingSeat = seat; openAuth("login"); toast(`Log in to hold ${seat.label}`); return; }
+  try {
+    const key = crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random();
+    await api(`/events/${currentEvent.id}/seats/${seat.id}/hold`, { method: "POST", headers: { "Idempotency-Key": key } });
+    toast(`Holding ${seat.label} for 5 minutes. Confirm it in My bookings.`);
+    await loadBookings(); loadSeats();
+  } catch (e) { toast(e.message); loadSeats(); }
+}
+
+async function act(id, what) {
+  try { await api(`/bookings/${id}/${what}`, { method: "POST" }); toast(what === "confirm" ? "Booked! (payment mocked)" : "Cancelled"); }
+  catch (e) { toast(e.message); }
+  await loadBookings(); if (currentEvent) loadSeats(); loadEvents();
+}
+
+async function loadBookings() {
+  const box = $("bookings");
+  if (!me) {
+    box.innerHTML = `<div class="cta"><p>Log in to hold seats and see your bookings.</p><button class="primary" onclick="openAuth('login')">Log in</button></div>`;
+    return;
+  }
+  let list = [];
+  try { list = await api("/me/bookings"); } catch { return; }
+  myHeldSeats = new Set(list.filter((b) => b.status === "held" || b.status === "confirmed").map((b) => b.seat_id));
+  const live = list.filter((b) => b.status === "held" || b.status === "confirmed");
+  box.innerHTML = live.length ? "" : `<div class="sub">No active bookings. Click a green seat to hold it.</div>`;
+  live.forEach((b) => {
+    const row = document.createElement("div"); row.className = "booking";
+    const left = b.hold_expires_at ? Math.max(0, Math.round((new Date(b.hold_expires_at) - Date.now()) / 1000)) : null;
+    row.innerHTML = `<div>Seat <b>${esc(b.seat_label)}</b> <span class="tag ${b.status}">${b.status}${left !== null ? " · " + Math.floor(left / 60) + "m " + (left % 60) + "s" : ""}</span></div>`;
+    const btns = document.createElement("div"); btns.className = "row";
+    if (b.status === "held") { const c = document.createElement("button"); c.className = "primary"; c.textContent = "Confirm"; c.onclick = () => act(b.id, "confirm"); btns.appendChild(c); }
+    const x = document.createElement("button"); x.textContent = "Cancel"; x.onclick = () => act(b.id, "cancel"); btns.appendChild(x);
+    row.appendChild(btns); box.appendChild(row);
+  });
+}
+
+loadMeta();
+loadEvents();
+loadMe();
+</script>
+</body>
+</html>

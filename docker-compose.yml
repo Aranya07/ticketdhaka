@@ -1,0 +1,37 @@
+services:
+  api:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/ticketdhaka
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: local-dev-secret-change-me-32-bytes-min
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_started }
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports: ["8080:80"]
+    volumes: ["./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro"]
+    depends_on: [api]
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ticketdhaka
+    ports: ["5432:5432"]   # exposed so the app/tests running on your machine can connect
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./deploy/init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+
+volumes:
+  pgdata:
