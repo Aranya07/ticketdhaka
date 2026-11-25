@@ -18,7 +18,7 @@ from app.db import Base, SessionLocal, engine
 from app.deps import require_docs_admin
 from app.realtime import hub
 from app.routers import admin, auth, bookings, events, payments
-from app.services import booking_service, event_service
+from app.services import aamarpay, booking_service, event_service
 
 settings = get_settings()
 STATIC = Path(__file__).parent / "static"
@@ -45,7 +45,14 @@ async def expiry_sweeper(app: FastAPI) -> None:
         try:
             def sweep() -> set[int]:
                 with SessionLocal() as db:
-                    return booking_service.release_expired_holds(db)
+                    changed: set[int] = set()
+                    if aamarpay.enabled():
+                        # First catch payments whose redirect never came back (tab closed), so a
+                        # paid seat is confirmed before its hold gets released below
+                        for booking, outcome in booking_service.reconcile_pending_payments(db, aamarpay.verify):
+                            if outcome == "confirmed":
+                                changed.add(booking.seat.event_id)
+                    return changed | booking_service.release_expired_holds(db)
 
             changed = await asyncio.to_thread(sweep)
             for event_id in changed:
@@ -69,7 +76,10 @@ def migrate_schema() -> None:
         if conn.execute(text("SELECT 1 FROM pg_type WHERE typname = 'role'")).first():
             conn.execute(text("ALTER TYPE role ADD VALUE IF NOT EXISTS 'admin'"))
         if conn.execute(text("SELECT 1 FROM pg_type WHERE typname = 'payment_method'")).first():
-            conn.execute(text("ALTER TYPE payment_method ADD VALUE IF NOT EXISTS 'stripe'"))
+            conn.execute(text("ALTER TYPE payment_method ADD VALUE IF NOT EXISTS 'aamarpay'"))
+        if conn.execute(text("SELECT 1 FROM pg_type WHERE typname = 'payment_status'")).first():
+            conn.execute(text("ALTER TYPE payment_status ADD VALUE IF NOT EXISTS 'pending'"))
+            conn.execute(text("ALTER TYPE payment_status ADD VALUE IF NOT EXISTS 'refund_pending'"))
         if conn.execute(text("SELECT to_regclass('events')")).scalar():
             conn.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS area VARCHAR(60) NOT NULL DEFAULT 'Dhaka'"))
             conn.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS category VARCHAR(30) NOT NULL DEFAULT 'other'"))

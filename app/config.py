@@ -32,9 +32,12 @@ class Settings(BaseSettings):
     admin_email: str | None = None
     admin_password: str | None = None
 
-    # Stripe (test mode is free: use sk_test_... keys). Leave empty to use the built-in demo gateway.
-    stripe_secret_key: str | None = None
-    stripe_webhook_secret: str | None = None  # whsec_..., from the Stripe dashboard or `stripe listen`
+    # aamarPay (Bangladesh: bKash, Nagad, Rocket, cards). Leave empty to use the built-in demo gateway.
+    # Free sandbox credentials from aamarPay's docs: store_id aamarpaytest,
+    # signature_key dbb74894e82415a2f7ff0ec3a97e4183. No real money moves in the sandbox.
+    aamarpay_store_id: str | None = None
+    aamarpay_signature_key: str | None = None
+    aamarpay_sandbox: bool = True  # False only with live credentials from aamarPay
 
 
 @lru_cache

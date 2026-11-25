@@ -114,7 +114,7 @@ def release_seat(seat_id: int, db: Session = Depends(get_db), cache: Cache = Dep
                                                              synchronize_session=False)
     try:
         refunded = refund_payments(db, ids)
-    except BookingError as e:  # Stripe refund failed: undo everything, the seat stays as it was
+    except BookingError as e:  # refund failed: undo everything, the seat stays as it was
         db.rollback()
         raise HTTPException(e.status_code, e.detail)
     seat.status, seat.held_by, seat.hold_expires_at = SeatStatus.available, None, None

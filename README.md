@@ -23,7 +23,7 @@ Dhaka has a packed events scene (Shilpakala, ICCB, Mirpur stadium, rooftop gigs 
 - **No double-booking:** `SELECT ... FOR UPDATE` row locks serialize competing transactions on a seat
 - **Idempotency keys:** a client retrying a request (flaky mobile network) never creates two bookings
 - **Hold → pay → confirm flow:** seats are held for 5 minutes; a background sweeper frees expired holds using `SKIP LOCKED`
-- **Payments with Stripe Checkout (test mode):** the payment, the booking and the seat are written in one transaction; the redirect and the signed webhook both confirm idempotently, so a payment is never recorded twice; cancellations and late payments are refunded through Stripe. Without Stripe keys a built-in demo gateway (bKash / Nagad / card) is used
+- **Payments with aamarPay** (bKash, Nagad, Rocket, cards; sandbox): the payment, the booking and the seat are written in one transaction; every result is verified with aamarPay's API (never trusted from the browser) and applied idempotently, so a payment is never recorded twice; a background job catches payments whose redirect never came back; late payments and cancellations are queued for refund. Without credentials a built-in demo gateway is used
 - **Priority waitlist:** a binary heap (VIP first, then FIFO); a cancelled seat goes straight to the next person
 - **Two-level cache:** a hand-written O(1) **LRU cache** (hash map + doubly linked list) in front of Redis
 - **Rate limiting:** a hand-written **token-bucket** limiter middleware (429 + `Retry-After`)
@@ -91,13 +91,15 @@ Admin (`/admin` and the API docs at `/docs`): `admin@local.dev` / `admin12345` u
 
 For development (app on your machine, Postgres + Redis in Docker): `bash scripts/setup.sh`. It works with Docker Desktop or Docker Engine inside WSL, and moves Postgres to port 5433 if a local PostgreSQL already uses 5432.
 
-### Payments with Stripe (test mode, free)
+### Payments with aamarPay (sandbox, free)
 
-1. Create a free Stripe account and copy the **test** secret key (`sk_test_...`) from dashboard.stripe.com/test/apikeys.
-2. Put it in `.env` as `STRIPE_SECRET_KEY`. Pay now opens Stripe's checkout page. Use test card `4242 4242 4242 4242`, any future date, any CVC.
-3. Webhook (confirms the booking even if the user closes the tab): locally run `stripe listen --forward-to localhost:8000/payments/stripe/webhook` and put the `whsec_...` it prints in `STRIPE_WEBHOOK_SECRET`. On Render, add an endpoint `https://<your-app>/payments/stripe/webhook` for `checkout.session.completed` in the Stripe dashboard and set its signing secret.
+aamarPay is a Bangladeshi gateway (bKash, Nagad, Rocket, cards). Its sandbox has public test credentials, so there's nothing to sign up for:
 
-No real money moves in test mode. Leave the keys empty to use the demo gateway instead.
+1. In `.env` set `AAMARPAY_STORE_ID=aamarpaytest` and `AAMARPAY_SIGNATURE_KEY=dbb74894e82415a2f7ff0ec3a97e4183`, then restart the app.
+2. Hold a seat and click Pay: you go to aamarPay's sandbox page, pay with any test method, and come back to a confirmed booking.
+3. The server checks every payment with aamarPay's transaction API before confirming, and the expiry sweeper re-checks unfinished ones, so closing the tab after paying still books the seat.
+
+aamarPay has no refund API: when a paid booking is cancelled, or a payment arrives after the hold ran out, the payment is marked `refund_pending` and the admin refunds it from the aamarPay merchant panel. No real money moves in the sandbox. Leave the credentials empty to use the demo gateway instead.
 
 **Tests:** `pytest -q` (needs a Postgres database called `ticketdhaka_test`). **Load test:** `k6 run bench/k6_booking_rush.js`.
 
@@ -111,9 +113,9 @@ No real money moves in test mode. Leave the keys empty to use the demo gateway i
 | POST | `/events` | Create an event + seat grid (organizers only) |
 | GET | `/events/{id}/seats` | Seat map (cached, invalidated on every change) |
 | POST | `/events/{id}/seats/{seat_id}/hold` | Hold a seat for 5 min. Requires an `Idempotency-Key` header |
-| POST | `/bookings/{id}/checkout` | Start a Stripe Checkout for a held seat; returns `checkout_url` |
-| POST | `/payments/stripe/webhook` | Stripe's signed webhook; confirms the booking (idempotent) |
-| POST | `/bookings/{id}/confirm` | Demo gateway payment (bKash / Nagad / card) → confirmed. Off when Stripe is set up |
+| POST | `/bookings/{id}/checkout` | Start an aamarPay payment for a held seat; returns `payment_url` |
+| GET/POST | `/payments/aamarpay/return?tran_id=` | Where aamarPay sends the browser back; verifies with aamarPay, then confirms (idempotent) |
+| POST | `/bookings/{id}/confirm` | Demo gateway payment (bKash / Nagad / card) → confirmed. Off when aamarPay is set up |
 | POST | `/bookings/{id}/cancel` | Cancel; a paid booking is refunded, and the seat goes to the waitlist if anyone is on it |
 | POST | `/events/{id}/waitlist` | Join the waitlist (only when sold out) |
 | GET | `/me/bookings` | Your bookings |

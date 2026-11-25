@@ -23,6 +23,7 @@ Payment (the transaction requirement):
 """
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -43,8 +44,8 @@ from app.models import (
     User,
     WaitlistEntry,
 )
-from app.services import payment_gateway, stripe_payments
-from app.services.stripe_payments import CheckoutResult, PaymentProviderError
+from app.services import aamarpay, payment_gateway
+from app.services.aamarpay import PaymentProviderError, Verification
 
 settings = get_settings()
 
@@ -172,50 +173,84 @@ def confirm_booking(db: Session, user: User, booking_id: int, method: PaymentMet
         raise
 
 
-def fulfill_stripe_payment(db: Session, paid: CheckoutResult) -> tuple[Booking | None, str]:
-    """Turns a paid Stripe Checkout into a confirmed booking. Called by both the browser redirect
-    and the webhook, so it must be idempotent. Returns (booking, outcome), outcome being one of:
-      confirmed  - this call confirmed the booking
-      duplicate  - this payment was already recorded (the other path got here first)
-      refunded   - the money came in but the seat can't be given (hold lost, amount mismatch,
-                   or the booking was already paid by another checkout), so it's refunded
-      unpaid     - Stripe says the session isn't paid (yet)
-    Same lock order as confirm_booking (booking, then seat), so the two can never deadlock."""
-    if not paid.paid or not paid.payment_intent:
-        return None, "unpaid"
+def start_aamarpay_checkout(db: Session, user: User, booking_id: int, return_base_url: str) -> str:
+    """Records a pending payment for a held seat and returns aamarPay's payment page URL.
+    The pending row is saved BEFORE calling aamarPay, so even if the user pays and closes the
+    tab, the sweeper knows the transaction ID and can still check it (reconcile_pending_payments)."""
+    booking = db.execute(select(Booking).where(Booking.id == booking_id)).scalar_one_or_none()
+    if booking is None or booking.user_id != user.id:
+        raise BookingError(404, "Booking not found")
+    if booking.status != BookingStatus.held:
+        raise BookingError(409, f"Booking is {booking.status.value}")
+    seat = db.get(Seat, booking.seat_id)
+    if seat.hold_expires_at and seat.hold_expires_at <= _now():
+        raise BookingError(410, "Hold expired, please pick the seat again")
+
+    tran_id = f"TD{booking.id}-{uuid.uuid4().hex[:12]}"  # ours; aamarPay allows max 32 chars
+    payment = Payment(
+        booking_id=booking.id, user_id=user.id, amount_cents=seat.price_cents, method=PaymentMethod.aamarpay,
+        account_last4="", status=PaymentStatus.pending, provider_ref=tran_id,
+    )
+    db.add(payment)
+    db.commit()
     try:
+        return aamarpay.create_payment(
+            tran_id=tran_id, amount_cents=seat.price_cents, description=f"{seat.event.title}: seat {seat.label}",
+            customer_name=user.name or user.email, customer_email=user.email,
+            return_url=f"{return_base_url}payments/aamarpay/return?tran_id={tran_id}",
+        )
+    except PaymentProviderError as e:
+        payment.status, payment.failure_reason = PaymentStatus.failed, str(e)[:200]
+        db.commit()
+        raise BookingError(502, "Payment gateway is unavailable, please try again") from e
+
+
+def fulfill_aamarpay_payment(db: Session, result: Verification) -> tuple[Booking | None, str]:
+    """Applies what aamarPay says about one of our transactions. Called from the browser return
+    AND from the sweeper, so it's idempotent. `result` comes from aamarpay.verify(), fetched
+    BEFORE taking any lock, so no row is locked while we wait on the network.
+    Returns (booking, outcome), outcome being one of:
+      confirmed       - this call confirmed the booking
+      duplicate       - already handled earlier (refresh, or the other path got here first)
+      refund_pending  - paid, but the seat can't be given (hold lost / wrong amount / already
+                        paid by another attempt): the admin must refund it in aamarPay's panel
+      failed          - the payment failed or expired; the hold stays, so the user can retry
+      unpaid          - nothing paid (yet)
+    Same lock order as confirm_booking (booking, then seat), so the two can never deadlock."""
+    try:
+        payment = db.execute(
+            select(Payment).where(Payment.provider_ref == result.tran_id)
+        ).scalar_one_or_none()
+        if payment is None:
+            return None, "unpaid"
         booking = db.execute(
-            select(Booking).where(Booking.id == paid.booking_id).with_for_update()
-        ).scalar_one_or_none()
-        already = db.execute(
-            select(Payment).where(Payment.provider_ref == paid.payment_intent)
-        ).scalar_one_or_none()
-        if already is not None:
+            select(Booking).where(Booking.id == payment.booking_id).with_for_update()
+        ).scalar_one()
+        db.refresh(payment)  # re-read now that we hold the booking lock
+        if payment.status != PaymentStatus.pending:
             db.rollback()
             return booking, "duplicate"
-        if booking is None:  # e.g. the event was deleted while the user was paying
-            stripe_payments.refund(paid.payment_intent)
+        if result.status == "failed":
+            payment.status, payment.failure_reason = PaymentStatus.failed, "Payment failed or expired at aamarPay"
+            db.commit()
+            return booking, "failed"
+        if result.status != "paid":
             db.rollback()
-            return None, "refunded"
+            return booking, "unpaid"
 
         seat = _lock_seat(db, booking.seat_id)
-        record = Payment(
-            booking_id=booking.id, user_id=booking.user_id, amount_cents=paid.amount_cents,
-            currency=paid.currency.upper(), method=PaymentMethod.stripe, account_last4=paid.card_last4,
-            provider_ref=paid.payment_intent,
-        )
+        payment.account_last4 = result.card_last4
         still_ours = (
             booking.status == BookingStatus.held and seat.status == SeatStatus.held and seat.held_by == booking.user_id
         )
         if not still_ours:
             reason = "Seat no longer held when the payment arrived"
-        elif booking.user_id != paid.user_id or paid.amount_cents != seat.price_cents or paid.currency != "bdt":
+        elif result.amount_cents != payment.amount_cents or result.currency != "BDT":
             reason = "Paid amount doesn't match the seat price"
         else:
             # Paid while we still hold the seat. A hold that ran out a moment ago but that nobody
             # else has taken yet still counts: the user paid, so they get the seat.
-            record.status = PaymentStatus.succeeded
-            db.add(record)
+            payment.status = PaymentStatus.succeeded
             seat.status = SeatStatus.booked
             seat.hold_expires_at = None
             booking.status = BookingStatus.confirmed
@@ -223,33 +258,57 @@ def fulfill_stripe_payment(db: Session, paid: CheckoutResult) -> tuple[Booking |
             db.commit()  # payment + booking + seat: all or nothing
             return booking, "confirmed"
 
-        stripe_payments.refund(paid.payment_intent)  # before commit: if this fails, nothing is saved
-        record.status, record.refunded_at, record.failure_reason = PaymentStatus.refunded, _now(), reason
-        db.add(record)
+        payment.status, payment.failure_reason = PaymentStatus.refund_pending, reason
         db.commit()
-        return booking, "refunded"
+        return booking, "refund_pending"
     except Exception:
         if db.in_transaction():
             db.rollback()
         raise
 
 
+def reconcile_pending_payments(db: Session, verify, older_than_seconds: int = 30) -> list[tuple[Booking, str]]:
+    """Run by the background sweeper: checks aamarPay payments that are still pending (e.g. the
+    user paid, then closed the tab before being sent back). `verify` is aamarpay.verify, passed
+    in so tests can fake it. Pending attempts nobody paid for are closed once the hold is gone."""
+    cutoff = _now() - timedelta(seconds=older_than_seconds)
+    tran_ids = db.scalars(
+        select(Payment.provider_ref).where(Payment.status == PaymentStatus.pending, Payment.created_at < cutoff)
+        .order_by(Payment.id).limit(50)
+    ).all()
+    db.rollback()  # don't keep a transaction open while calling aamarPay
+    outcomes = []
+    for tran_id in tran_ids:
+        try:
+            result = verify(tran_id)
+        except PaymentProviderError:
+            continue  # aamarPay is down: try again on the next sweep
+        booking, outcome = fulfill_aamarpay_payment(db, result)
+        if outcome == "unpaid" and booking is not None and booking.status != BookingStatus.held:
+            payment = db.execute(select(Payment).where(Payment.provider_ref == tran_id)).scalar_one()
+            if payment.status == PaymentStatus.pending:  # never paid, and the hold is gone
+                payment.status, payment.failure_reason = PaymentStatus.failed, "Not paid before the hold ended"
+                db.commit()
+            outcome = "failed"
+        outcomes.append((booking, outcome))
+    return outcomes
+
+
 def refund_payments(db: Session, booking_ids: list[int]) -> int:
-    """Refunds the successful payments of these bookings (the caller commits). Stripe payments
-    get a real refund through the Stripe API; demo-gateway payments are just marked refunded.
-    Returns how many were refunded."""
+    """Refunds the successful payments of these bookings (the caller commits). Demo-gateway
+    payments are simply marked refunded. aamarPay has no refund API, so its payments become
+    refund_pending: the admin sends the money back from the aamarPay merchant panel.
+    Returns how many payments were refunded or queued for refund."""
     if not booking_ids:
         return 0
     payments = db.execute(
         select(Payment).where(Payment.booking_id.in_(booking_ids), Payment.status == PaymentStatus.succeeded)
     ).scalars().all()
     for p in payments:
-        if p.method == PaymentMethod.stripe:
-            try:
-                stripe_payments.refund(p.provider_ref)
-            except PaymentProviderError as e:
-                raise BookingError(502, f"Refund failed, please try again: {e}") from e
-        p.status, p.refunded_at = PaymentStatus.refunded, _now()
+        if p.method == PaymentMethod.aamarpay:
+            p.status, p.failure_reason = PaymentStatus.refund_pending, "Booking cancelled"
+        else:
+            p.status, p.refunded_at = PaymentStatus.refunded, _now()
     return len(payments)
 
 

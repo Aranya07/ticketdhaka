@@ -43,13 +43,15 @@ class PaymentMethod(str, enum.Enum):
     bkash = "bkash"
     nagad = "nagad"
     card = "card"
-    stripe = "stripe"  # paid on Stripe's hosted Checkout page
+    aamarpay = "aamarpay"  # paid on aamarPay's hosted page (bKash, Nagad, Rocket, cards)
 
 
 class PaymentStatus(str, enum.Enum):
+    pending = "pending"                # sent to aamarPay's payment page, result not known yet
     succeeded = "succeeded"
     failed = "failed"
     refunded = "refunded"
+    refund_pending = "refund_pending"  # money came in but must go back; the admin refunds it by hand
 
 
 class User(Base):

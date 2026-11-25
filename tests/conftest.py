@@ -6,6 +6,8 @@ os.environ["SEED_DEMO_DATA"] = "false"
 os.environ["RATE_LIMIT_ENABLED"] = "false"
 os.environ.pop("REDIS_URL", None)
 os.environ["ADMIN_EMAIL"] = ""  # a local .env admin must not leak into test databases
+os.environ["AAMARPAY_STORE_ID"] = ""  # tests use the demo gateway; aamarPay tests switch it on themselves
+os.environ["AAMARPAY_SIGNATURE_KEY"] = ""
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402

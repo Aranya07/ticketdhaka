@@ -8,8 +8,9 @@ services:
       # ${VAR:-default} values come from your shell or the .env file next to this one
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@local.dev}          # admin login for /admin and /docs
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin12345}
-      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}             # empty = demo payment gateway
-      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      AAMARPAY_STORE_ID: ${AAMARPAY_STORE_ID:-}             # empty = demo payment gateway
+      AAMARPAY_SIGNATURE_KEY: ${AAMARPAY_SIGNATURE_KEY:-}
+      AAMARPAY_SANDBOX: ${AAMARPAY_SANDBOX:-true}
     depends_on:
       db: { condition: service_healthy }
       redis: { condition: service_started }

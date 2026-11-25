@@ -69,9 +69,12 @@ JWT_SECRET=local-dev-secret-$(date +%s)-change-me-please
 ADMIN_EMAIL=admin@local.dev
 ADMIN_PASSWORD=admin12345
 SEED_DEMO_DATA=true
-# Stripe test mode (optional): paste your sk_test_... key to use Stripe Checkout instead of the demo gateway
-STRIPE_SECRET_KEY=
-STRIPE_WEBHOOK_SECRET=
+# aamarPay sandbox (optional, free, no real money). Fill these in to pay through aamarPay
+# instead of the demo gateway: AAMARPAY_STORE_ID=aamarpaytest and
+# AAMARPAY_SIGNATURE_KEY=dbb74894e82415a2f7ff0ec3a97e4183 (public test credentials from aamarPay's docs)
+AAMARPAY_STORE_ID=
+AAMARPAY_SIGNATURE_KEY=
+AAMARPAY_SANDBOX=true
 ENV
   echo "    wrote .env (local admin: admin@local.dev / admin12345)"
 else

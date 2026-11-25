@@ -375,11 +375,11 @@ async function refreshAll() { await loadBookings(); if (currentEvent) loadSeats(
 // ---- payment: a held seat is only booked after a successful payment ----
 const taka = (cents) => "৳" + (cents / 100).toLocaleString();
 let payingBooking = null;
-let payProvider = "demo";  // "stripe" when the server has Stripe keys, else the demo gateway form
+let payProvider = "demo";  // "aamarpay" when the server has aamarPay credentials, else the demo gateway form
 fetch("/payments/config").then((r) => r.json()).then((c) => { payProvider = c.provider; }).catch(() => {});
 
 async function openPay(b) {
-  if (payProvider === "stripe") return startStripeCheckout(b);
+  if (payProvider === "aamarpay") return startCheckout(b);
   payingBooking = b;
   $("paySeat").textContent = b.seat_label; $("payAmount").textContent = taka(b.amount_cents);
   $("payError").textContent = ""; $("payAccount").value = ""; updatePayHint();
@@ -407,23 +407,23 @@ async function submitPay(ev) {
   } finally { btn.disabled = false; }
 }
 
-// Stripe: card details are typed on Stripe's own page, never on ours
-async function startStripeCheckout(b) {
+// aamarPay: bKash / Nagad / Rocket / card details are entered on aamarPay's page, never on ours
+async function startCheckout(b) {
   try {
-    toast("Opening secure Stripe checkout…");
+    toast("Opening aamarPay (bKash, Nagad, Rocket, cards)…");
     const r = await api(`/bookings/${b.id}/checkout`, { method: "POST" });
-    window.location.href = r.checkout_url;
+    window.location.href = r.payment_url;
   } catch (e) { toast(e.message); await refreshAll(); }
 }
 
-// Back from Stripe: /?payment=success | cancelled | refunded | pending
+// Back from aamarPay: /?payment=success | failed | refund | pending
 (function showPaymentResult() {
   const result = new URLSearchParams(location.search).get("payment");
   if (!result) return;
   const messages = {
     success: "Payment received, your seat is booked! 🎉",
-    cancelled: "Payment cancelled. Your seat stays held for the rest of its 5 minutes.",
-    refunded: "Your hold ran out before the payment finished, so the payment was refunded automatically.",
+    failed: "Payment didn't go through (failed or cancelled). Your seat stays held, so you can try again.",
+    refund: "Your hold ran out before the payment finished, so the seat couldn't be booked. Your money will be refunded.",
     pending: "Payment is still processing. Your booking will update in a moment.",
   };
   history.replaceState(null, "", location.pathname);  // so a refresh doesn't show it again

@@ -8,15 +8,15 @@ from app.deps import get_current_user
 from app.models import Booking, PaymentStatus, User
 from app.routers.events import get_cache, notify_change
 from app.schemas import BookingOut, PaymentIn
+from app.services import aamarpay
 from app.services import booking_service as svc
-from app.services import stripe_payments
 from app.services.booking_service import BookingError
 
 router = APIRouter(tags=["bookings"])
 
 
 def _out(b: Booking) -> BookingOut:
-    paid = next((p for p in b.payments if p.status != PaymentStatus.failed), None)
+    paid = next((p for p in b.payments if p.status in (PaymentStatus.succeeded, PaymentStatus.refunded)), None)
     return BookingOut(
         id=b.id, seat_id=b.seat_id, seat_label=b.seat.label, event_id=b.seat.event_id,
         status=b.status, created_at=b.created_at, confirmed_at=b.confirmed_at,
@@ -61,10 +61,10 @@ def confirm(
     cache: Cache = Depends(get_cache),
     user: User = Depends(get_current_user),
 ):
-    """Pays with the built-in demo gateway. Switched off when Stripe is set up, so nobody can
+    """Pays with the built-in demo gateway. Switched off when aamarPay is set up, so nobody can
     skip the real checkout with a made-up bKash number."""
-    if stripe_payments.enabled():
-        raise HTTPException(409, "This site takes payments through Stripe: use POST /bookings/{id}/checkout")
+    if aamarpay.enabled():
+        raise HTTPException(409, "This site takes payments through aamarPay: use POST /bookings/{id}/checkout")
     try:
         booking = svc.confirm_booking(db, user, booking_id, payment.method, payment.account)
     except BookingError as e:

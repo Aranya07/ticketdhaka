@@ -1,95 +1,56 @@
-"""Stripe Checkout endpoints. The flow is explained in app/services/stripe_payments.py."""
-from datetime import UTC, datetime
-
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from fastapi.concurrency import run_in_threadpool
+"""aamarPay checkout endpoints. The flow is explained in app/services/aamarpay.py."""
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
-from sqlalchemy import select
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
 from app.core.cache import Cache
-from app.db import SessionLocal, get_db
+from app.db import get_db
 from app.deps import get_current_user
-from app.models import Booking, BookingStatus, Seat, User
+from app.models import User
 from app.routers.events import get_cache, notify_change
+from app.services import aamarpay
 from app.services import booking_service as svc
-from app.services import stripe_payments
-from app.services.stripe_payments import PaymentProviderError
+from app.services.aamarpay import PaymentProviderError
+from app.services.booking_service import BookingError
 
 router = APIRouter(tags=["payments"])
 
-# What the browser lands on after Stripe, per fulfil outcome (index.html shows a matching message)
-RETURN_PAGE = {"confirmed": "success", "duplicate": "success", "refunded": "refunded", "unpaid": "pending"}
+# Where the browser lands after aamarPay, per outcome (index.html shows a matching message)
+RETURN_PAGE = {"confirmed": "success", "duplicate": "success", "refund_pending": "refund",
+               "failed": "failed", "unpaid": "pending"}
 
 
 @router.get("/payments/config")
 def payment_config():
     """Tells the frontend which payment flow to show."""
-    return {"provider": "stripe" if stripe_payments.enabled() else "demo", "currency": "BDT"}
+    return {"provider": "aamarpay" if aamarpay.enabled() else "demo", "currency": "BDT"}
 
 
-@router.post("/bookings/{booking_id}/checkout", responses={409: {"description": "Not held, or Stripe not set up"}})
+@router.post("/bookings/{booking_id}/checkout", responses={409: {"description": "Not held, or aamarPay not set up"}})
 def start_checkout(
     booking_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
-    """Creates a Stripe Checkout page for a held seat. Send the browser to `checkout_url`."""
-    if not stripe_payments.enabled():
-        raise HTTPException(409, "Stripe isn't set up on this server; pay with POST /bookings/{id}/confirm")
-    booking = db.execute(
-        select(Booking).options(joinedload(Booking.seat).joinedload(Seat.event)).where(Booking.id == booking_id)
-    ).scalar_one_or_none()
-    if booking is None or booking.user_id != user.id:
-        raise HTTPException(404, "Booking not found")
-    if booking.status != BookingStatus.held:
-        raise HTTPException(409, f"Booking is {booking.status.value}")
-    seat = booking.seat
-    if seat.hold_expires_at and seat.hold_expires_at <= datetime.now(UTC):
-        raise HTTPException(410, "Hold expired, please pick the seat again")
+    """Starts an aamarPay payment for a held seat. Send the browser to `payment_url`, where the
+    user pays with bKash, Nagad, Rocket or a card."""
+    if not aamarpay.enabled():
+        raise HTTPException(409, "aamarPay isn't set up on this server; pay with POST /bookings/{id}/confirm")
     try:
-        url = stripe_payments.create_checkout(
-            booking_id=booking.id, user_id=user.id, title=f"{seat.event.title}: seat {seat.label}",
-            amount_cents=seat.price_cents, base_url=str(request.base_url),
-        )
-    except PaymentProviderError as e:
-        raise HTTPException(502, f"Stripe error: {e}")
-    return {"checkout_url": url}
+        url = svc.start_aamarpay_checkout(db, user, booking_id, str(request.base_url))
+    except BookingError as e:
+        raise HTTPException(e.status_code, e.detail)
+    return {"payment_url": url}
 
 
-def _fulfill(session_id: str, cache: Cache) -> str:
-    """Shared by the redirect and the webhook. Returns the fulfil outcome."""
-    paid = stripe_payments.retrieve_checkout(session_id)
-    with SessionLocal() as db:
-        booking, outcome = svc.fulfill_stripe_payment(db, paid)
-        if outcome == "confirmed":
-            notify_change(cache, booking.seat.event_id, booking.seat_id, "booked")
-    return outcome
-
-
-@router.get("/payments/stripe/return", include_in_schema=False)
-def stripe_return(session_id: str, cache: Cache = Depends(get_cache)):
-    """Stripe sends the browser here after a payment. No login needed: the session ID is checked
-    against Stripe's API, so a made-up or someone else's ID can't confirm anything it shouldn't."""
+@router.api_route("/payments/aamarpay/return", methods=["GET", "POST"], include_in_schema=False)
+def aamarpay_return(tran_id: str, db: Session = Depends(get_db), cache: Cache = Depends(get_cache)):
+    """aamarPay sends the browser here after a payment (success, fail or cancel). No login needed
+    and nothing from the request is trusted except our own transaction ID: the server asks
+    aamarPay's API what really happened, so a faked redirect can't confirm a booking."""
     try:
-        outcome = _fulfill(session_id, cache)
+        result = aamarpay.verify(tran_id)
     except PaymentProviderError:
-        return RedirectResponse("/?payment=pending", status_code=303)  # the webhook will finish it
+        return RedirectResponse("/?payment=pending", status_code=303)  # the sweeper will finish it
+    booking, outcome = svc.fulfill_aamarpay_payment(db, result)
+    if outcome == "confirmed":
+        notify_change(cache, booking.seat.event_id, booking.seat_id, "booked")
     return RedirectResponse(f"/?payment={RETURN_PAGE[outcome]}", status_code=303)
-
-
-@router.post("/payments/stripe/webhook", include_in_schema=False)
-async def stripe_webhook(request: Request, stripe_signature: str = Header("", alias="Stripe-Signature")):
-    """Stripe calls this after every payment, even if the user closed the tab. Any non-2xx answer
-    makes Stripe retry later, which is safe because fulfilling is idempotent."""
-    if not stripe_payments.webhook_enabled():
-        raise HTTPException(503, "Stripe webhook secret isn't configured")
-    payload = await request.body()  # the raw bytes: the signature is computed over them
-    try:
-        session_id = stripe_payments.checkout_session_from_webhook(payload, stripe_signature)
-    except ValueError:
-        raise HTTPException(400, "Invalid signature")
-    if session_id:
-        try:
-            await run_in_threadpool(_fulfill, session_id, request.app.state.cache)
-        except PaymentProviderError as e:
-            raise HTTPException(502, f"Stripe error: {e}")
-    return {"received": True}
