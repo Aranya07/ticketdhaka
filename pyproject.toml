@@ -8,4 +8,3 @@ ignore = ["B008", "B904", "UP042"]  # B008: FastAPI Depends() idiom
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-filterwarnings = ["ignore::jwt.warnings.InsecureKeyLengthWarning"]
