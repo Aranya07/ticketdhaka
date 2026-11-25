@@ -5,7 +5,7 @@
 [![CI](https://github.com/Aranya07/ticketdhaka/actions/workflows/ci.yml/badge.svg)](https://github.com/Aranya07/ticketdhaka/actions)
 ![Python](https://img.shields.io/badge/python-3.12-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791) ![Redis](https://img.shields.io/badge/Redis-7-DC382D)
 
-**Live demo:** https://seatlock-h79e.onrender.com · **API docs:** https://seatlock-h79e.onrender.com/docs
+**Live demo:** https://ticketdhaka-lk0v.onrender.com · **API docs:** https://ticketdhaka-lk0v.onrender.com/docs
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Aranya07/ticketdhaka)
 
