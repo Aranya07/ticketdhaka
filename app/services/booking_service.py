@@ -12,6 +12,14 @@ Idempotency:
   booking with that key *after* taking the seat lock, so two retries of the same
   request are serialized and the second just gets back the first's booking.
   A UNIQUE(user_id, idempotency_key) constraint is the final safety net.
+
+Payment (the transaction requirement):
+  A hold only becomes "confirmed" after a successful payment. The payment row,
+  the booking status and the seat status are written in ONE database transaction
+  while the seat row is locked, so you can never end up with a confirmed booking
+  that has no payment (or the other way round). Double-clicking "Pay" can't charge
+  twice: the second request waits on the booking lock, then sees "confirmed" and
+  returns without calling the gateway.
 """
 from __future__ import annotations
 
@@ -24,7 +32,19 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.core.waitlist import PriorityWaitlist, WaitlistItem
-from app.models import Booking, BookingStatus, Seat, SeatStatus, User, WaitlistEntry
+from app.models import (
+    Booking,
+    BookingStatus,
+    Payment,
+    PaymentMethod,
+    PaymentStatus,
+    Seat,
+    SeatStatus,
+    User,
+    WaitlistEntry,
+)
+from app.services import payment_gateway, stripe_payments
+from app.services.stripe_payments import CheckoutResult, PaymentProviderError
 
 settings = get_settings()
 
@@ -114,13 +134,13 @@ def _lock_booking(db: Session, booking_id: int, user: User) -> Booking:
     return booking
 
 
-def confirm_booking(db: Session, user: User, booking_id: int) -> Booking:
-    """Mock payment, then turn the hold into a confirmed booking."""
+def confirm_booking(db: Session, user: User, booking_id: int, method: PaymentMethod, account: str) -> Booking:
+    """Charges the user for the held seat. On success, the hold becomes a confirmed booking."""
     try:
         booking = _lock_booking(db, booking_id, user)
         if booking.status == BookingStatus.confirmed:
             db.rollback()
-            return booking  # confirming twice is a no-op
+            return booking  # already paid: confirming twice never charges twice
         if booking.status != BookingStatus.held:
             raise BookingError(409, f"Booking is {booking.status.value}")
 
@@ -130,17 +150,107 @@ def confirm_booking(db: Session, user: User, booking_id: int) -> Booking:
             db.commit()
             raise BookingError(410, "Hold expired, please pick the seat again")
 
-        # A real system would charge a payment provider here (with its own idempotency key).
+        result = payment_gateway.charge(method, account, seat.price_cents, reference=f"booking-{booking.id}")
+        db.add(Payment(
+            booking_id=booking.id, user_id=user.id, amount_cents=seat.price_cents, method=method,
+            account_last4=account[-4:], provider_ref=result.provider_ref, failure_reason=result.failure_reason,
+            status=PaymentStatus.succeeded if result.ok else PaymentStatus.failed,
+        ))
+        if not result.ok:
+            db.commit()  # keep the failed attempt on record; the hold stays so the user can retry
+            raise BookingError(402, f"Payment failed: {result.failure_reason}")
+
         seat.status = SeatStatus.booked
         seat.hold_expires_at = None
         booking.status = BookingStatus.confirmed
         booking.confirmed_at = _now()
-        db.commit()
+        db.commit()  # payment + booking + seat: all or nothing
         return booking
     except BookingError:
         if db.in_transaction():
             db.rollback()
         raise
+
+
+def fulfill_stripe_payment(db: Session, paid: CheckoutResult) -> tuple[Booking | None, str]:
+    """Turns a paid Stripe Checkout into a confirmed booking. Called by both the browser redirect
+    and the webhook, so it must be idempotent. Returns (booking, outcome), outcome being one of:
+      confirmed  - this call confirmed the booking
+      duplicate  - this payment was already recorded (the other path got here first)
+      refunded   - the money came in but the seat can't be given (hold lost, amount mismatch,
+                   or the booking was already paid by another checkout), so it's refunded
+      unpaid     - Stripe says the session isn't paid (yet)
+    Same lock order as confirm_booking (booking, then seat), so the two can never deadlock."""
+    if not paid.paid or not paid.payment_intent:
+        return None, "unpaid"
+    try:
+        booking = db.execute(
+            select(Booking).where(Booking.id == paid.booking_id).with_for_update()
+        ).scalar_one_or_none()
+        already = db.execute(
+            select(Payment).where(Payment.provider_ref == paid.payment_intent)
+        ).scalar_one_or_none()
+        if already is not None:
+            db.rollback()
+            return booking, "duplicate"
+        if booking is None:  # e.g. the event was deleted while the user was paying
+            stripe_payments.refund(paid.payment_intent)
+            db.rollback()
+            return None, "refunded"
+
+        seat = _lock_seat(db, booking.seat_id)
+        record = Payment(
+            booking_id=booking.id, user_id=booking.user_id, amount_cents=paid.amount_cents,
+            currency=paid.currency.upper(), method=PaymentMethod.stripe, account_last4=paid.card_last4,
+            provider_ref=paid.payment_intent,
+        )
+        still_ours = (
+            booking.status == BookingStatus.held and seat.status == SeatStatus.held and seat.held_by == booking.user_id
+        )
+        if not still_ours:
+            reason = "Seat no longer held when the payment arrived"
+        elif booking.user_id != paid.user_id or paid.amount_cents != seat.price_cents or paid.currency != "bdt":
+            reason = "Paid amount doesn't match the seat price"
+        else:
+            # Paid while we still hold the seat. A hold that ran out a moment ago but that nobody
+            # else has taken yet still counts: the user paid, so they get the seat.
+            record.status = PaymentStatus.succeeded
+            db.add(record)
+            seat.status = SeatStatus.booked
+            seat.hold_expires_at = None
+            booking.status = BookingStatus.confirmed
+            booking.confirmed_at = _now()
+            db.commit()  # payment + booking + seat: all or nothing
+            return booking, "confirmed"
+
+        stripe_payments.refund(paid.payment_intent)  # before commit: if this fails, nothing is saved
+        record.status, record.refunded_at, record.failure_reason = PaymentStatus.refunded, _now(), reason
+        db.add(record)
+        db.commit()
+        return booking, "refunded"
+    except Exception:
+        if db.in_transaction():
+            db.rollback()
+        raise
+
+
+def refund_payments(db: Session, booking_ids: list[int]) -> int:
+    """Refunds the successful payments of these bookings (the caller commits). Stripe payments
+    get a real refund through the Stripe API; demo-gateway payments are just marked refunded.
+    Returns how many were refunded."""
+    if not booking_ids:
+        return 0
+    payments = db.execute(
+        select(Payment).where(Payment.booking_id.in_(booking_ids), Payment.status == PaymentStatus.succeeded)
+    ).scalars().all()
+    for p in payments:
+        if p.method == PaymentMethod.stripe:
+            try:
+                stripe_payments.refund(p.provider_ref)
+            except PaymentProviderError as e:
+                raise BookingError(502, f"Refund failed, please try again: {e}") from e
+        p.status, p.refunded_at = PaymentStatus.refunded, _now()
+    return len(payments)
 
 
 def cancel_booking(db: Session, user: User, booking_id: int) -> tuple[Booking, int | None]:
@@ -151,6 +261,8 @@ def cancel_booking(db: Session, user: User, booking_id: int) -> tuple[Booking, i
         if booking.status not in (BookingStatus.held, BookingStatus.confirmed):
             raise BookingError(409, f"Booking is {booking.status.value}")
         seat = _lock_seat(db, booking.seat_id)
+        if booking.status == BookingStatus.confirmed:
+            refund_payments(db, [booking.id])
         booking.status = BookingStatus.cancelled
         seat.status = SeatStatus.available
         seat.held_by = None

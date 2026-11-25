@@ -17,7 +17,7 @@ from app.core.rate_limiter import TokenBucketLimiter
 from app.db import Base, SessionLocal, engine
 from app.deps import require_docs_admin
 from app.realtime import hub
-from app.routers import admin, auth, bookings, events
+from app.routers import admin, auth, bookings, events, payments
 from app.services import booking_service, event_service
 
 settings = get_settings()
@@ -68,6 +68,8 @@ def migrate_schema() -> None:
     with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
         if conn.execute(text("SELECT 1 FROM pg_type WHERE typname = 'role'")).first():
             conn.execute(text("ALTER TYPE role ADD VALUE IF NOT EXISTS 'admin'"))
+        if conn.execute(text("SELECT 1 FROM pg_type WHERE typname = 'payment_method'")).first():
+            conn.execute(text("ALTER TYPE payment_method ADD VALUE IF NOT EXISTS 'stripe'"))
         if conn.execute(text("SELECT to_regclass('events')")).scalar():
             conn.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS area VARCHAR(60) NOT NULL DEFAULT 'Dhaka'"))
             conn.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS category VARCHAR(30) NOT NULL DEFAULT 'other'"))
@@ -142,6 +144,7 @@ app.include_router(auth.router)
 app.include_router(events.router)
 app.include_router(bookings.router)
 app.include_router(admin.router)
+app.include_router(payments.router)
 
 
 @app.get("/health", tags=["ops"])

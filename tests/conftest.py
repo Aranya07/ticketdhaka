@@ -64,5 +64,8 @@ def event(client, organizer):
     return ev, seats
 
 
+PAY = {"method": "bkash", "account": "01712345678"}  # a payment the mock gateway accepts
+
+
 def key() -> str:
     return uuid.uuid4().hex

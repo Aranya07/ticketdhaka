@@ -22,7 +22,8 @@ Dhaka has a packed events scene (Shilpakala, ICCB, Mirpur stadium, rooftop gigs 
 - **Events in and around Dhaka:** 9 categories (music, tech, sports, food, theatre, comedy, workshop, festival, other) × areas (Gulshan, Dhanmondi, Mirpur, Uttara, Savar, Gazipur, Narayanganj…), with search, filters and "from ৳" pricing; past events are hidden automatically
 - **No double-booking:** `SELECT ... FOR UPDATE` row locks serialize competing transactions on a seat
 - **Idempotency keys:** a client retrying a request (flaky mobile network) never creates two bookings
-- **Hold → confirm flow:** seats are held for 5 minutes; a background sweeper frees expired holds using `SKIP LOCKED`
+- **Hold → pay → confirm flow:** seats are held for 5 minutes; a background sweeper frees expired holds using `SKIP LOCKED`
+- **Payments with Stripe Checkout (test mode):** the payment, the booking and the seat are written in one transaction; the redirect and the signed webhook both confirm idempotently, so a payment is never recorded twice; cancellations and late payments are refunded through Stripe. Without Stripe keys a built-in demo gateway (bKash / Nagad / card) is used
 - **Priority waitlist:** a binary heap (VIP first, then FIFO); a cancelled seat goes straight to the next person
 - **Two-level cache:** a hand-written O(1) **LRU cache** (hash map + doubly linked list) in front of Redis
 - **Rate limiting:** a hand-written **token-bucket** limiter middleware (429 + `Retry-After`)
@@ -86,7 +87,17 @@ docker compose up --build        # API + Postgres + Redis + nginx
 open http://localhost:8080       # demo login: demo@ticketdhaka.dev / demo12345
 ```
 
-Without Docker: `pip install -r requirements-dev.txt`, start Postgres, copy `.env.example` to `.env`, then `uvicorn app.main:app --reload`.
+Admin (`/admin` and the API docs at `/docs`): `admin@local.dev` / `admin12345` unless you set `ADMIN_EMAIL` / `ADMIN_PASSWORD`.
+
+For development (app on your machine, Postgres + Redis in Docker): `bash scripts/setup.sh`. It works with Docker Desktop or Docker Engine inside WSL, and moves Postgres to port 5433 if a local PostgreSQL already uses 5432.
+
+### Payments with Stripe (test mode, free)
+
+1. Create a free Stripe account and copy the **test** secret key (`sk_test_...`) from dashboard.stripe.com/test/apikeys.
+2. Put it in `.env` as `STRIPE_SECRET_KEY`. Pay now opens Stripe's checkout page. Use test card `4242 4242 4242 4242`, any future date, any CVC.
+3. Webhook (confirms the booking even if the user closes the tab): locally run `stripe listen --forward-to localhost:8000/payments/stripe/webhook` and put the `whsec_...` it prints in `STRIPE_WEBHOOK_SECRET`. On Render, add an endpoint `https://<your-app>/payments/stripe/webhook` for `checkout.session.completed` in the Stripe dashboard and set its signing secret.
+
+No real money moves in test mode. Leave the keys empty to use the demo gateway instead.
 
 **Tests:** `pytest -q` (needs a Postgres database called `ticketdhaka_test`). **Load test:** `k6 run bench/k6_booking_rush.js`.
 
@@ -100,8 +111,10 @@ Without Docker: `pip install -r requirements-dev.txt`, start Postgres, copy `.en
 | POST | `/events` | Create an event + seat grid (organizers only) |
 | GET | `/events/{id}/seats` | Seat map (cached, invalidated on every change) |
 | POST | `/events/{id}/seats/{seat_id}/hold` | Hold a seat for 5 min. Requires an `Idempotency-Key` header |
-| POST | `/bookings/{id}/confirm` | Mock payment → confirmed |
-| POST | `/bookings/{id}/cancel` | Cancel; the seat goes to the waitlist if anyone is on it |
+| POST | `/bookings/{id}/checkout` | Start a Stripe Checkout for a held seat; returns `checkout_url` |
+| POST | `/payments/stripe/webhook` | Stripe's signed webhook; confirms the booking (idempotent) |
+| POST | `/bookings/{id}/confirm` | Demo gateway payment (bKash / Nagad / card) → confirmed. Off when Stripe is set up |
+| POST | `/bookings/{id}/cancel` | Cancel; a paid booking is refunded, and the seat goes to the waitlist if anyone is on it |
 | POST | `/events/{id}/waitlist` | Join the waitlist (only when sold out) |
 | GET | `/me/bookings` | Your bookings |
 | WS | `/ws/events/{id}` | Live seat updates |

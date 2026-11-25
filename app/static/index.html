@@ -140,6 +140,24 @@
     </div>
   </div>
 </div>
+<div class="overlay" id="payOverlay" onclick="if (event.target === this) closePay()">
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="payTitle">
+    <button class="close" onclick="closePay()" aria-label="Close">×</button>
+    <h3 id="payTitle">Pay for seat <span id="paySeat"></span></h3>
+    <div class="sub">Amount: <b id="payAmount"></b>. Your seat stays held while you pay.</div>
+    <form id="payForm" onsubmit="submitPay(event)" style="margin-top:14px">
+      <label for="payMethod">Payment method</label>
+      <select id="payMethod" onchange="updatePayHint()">
+        <option value="bkash">bKash</option><option value="nagad">Nagad</option><option value="card">Card</option>
+      </select>
+      <label for="payAccount" id="payAccountLabel">Mobile number</label>
+      <input id="payAccount" inputmode="numeric" autocomplete="off" required />
+      <div class="sub" style="font-size:12px;margin:-4px 0 8px">Demo gateway: no real money moves. Numbers ending in 0000 get declined.</div>
+      <div class="error" id="payError"></div>
+      <button class="primary full" id="paySubmit" type="submit">Pay</button>
+    </form>
+  </div>
+</div>
 <div id="toast"></div>
 
 <script>
@@ -342,16 +360,76 @@ async function hold(seat) {
   try {
     const key = crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random();
     await api(`/events/${currentEvent.id}/seats/${seat.id}/hold`, { method: "POST", headers: { "Idempotency-Key": key } });
-    toast(`Holding ${seat.label} for 5 minutes. Confirm it in My bookings.`);
+    toast(`Holding ${seat.label} for 5 minutes. Pay for it in My bookings.`);
     await loadBookings(); loadSeats();
   } catch (e) { toast(e.message); loadSeats(); }
 }
 
 async function act(id, what) {
-  try { await api(`/bookings/${id}/${what}`, { method: "POST" }); toast(what === "confirm" ? "Booked! (payment mocked)" : "Cancelled"); }
+  try { await api(`/bookings/${id}/${what}`, { method: "POST" }); toast("Cancelled"); }
   catch (e) { toast(e.message); }
-  await loadBookings(); if (currentEvent) loadSeats(); loadEvents();
+  await refreshAll();
 }
+async function refreshAll() { await loadBookings(); if (currentEvent) loadSeats(); loadEvents(); }
+
+// ---- payment: a held seat is only booked after a successful payment ----
+const taka = (cents) => "৳" + (cents / 100).toLocaleString();
+let payingBooking = null;
+let payProvider = "demo";  // "stripe" when the server has Stripe keys, else the demo gateway form
+fetch("/payments/config").then((r) => r.json()).then((c) => { payProvider = c.provider; }).catch(() => {});
+
+async function openPay(b) {
+  if (payProvider === "stripe") return startStripeCheckout(b);
+  payingBooking = b;
+  $("paySeat").textContent = b.seat_label; $("payAmount").textContent = taka(b.amount_cents);
+  $("payError").textContent = ""; $("payAccount").value = ""; updatePayHint();
+  $("payOverlay").classList.add("open"); $("payAccount").focus();
+}
+function closePay() { $("payOverlay").classList.remove("open"); payingBooking = null; }
+function updatePayHint() {
+  const card = $("payMethod").value === "card";
+  $("payAccountLabel").textContent = card ? "Card number" : "Mobile number";
+  $("payAccount").placeholder = card ? "16-digit card number" : "01XXXXXXXXX";
+}
+async function submitPay(ev) {
+  ev.preventDefault();
+  if (!payingBooking) return;
+  const btn = $("paySubmit"); btn.disabled = true; $("payError").textContent = "";
+  try {
+    const b = await api(`/bookings/${payingBooking.id}/confirm`, {
+      method: "POST", body: JSON.stringify({ method: $("payMethod").value, account: $("payAccount").value }),
+    });
+    closePay(); toast(`Paid! Transaction ${b.transaction_id}`);
+    await refreshAll();
+  } catch (e) {
+    $("payError").textContent = e.message;
+    if (/expired/i.test(e.message)) { closePay(); toast(e.message); await refreshAll(); }
+  } finally { btn.disabled = false; }
+}
+
+// Stripe: card details are typed on Stripe's own page, never on ours
+async function startStripeCheckout(b) {
+  try {
+    toast("Opening secure Stripe checkout…");
+    const r = await api(`/bookings/${b.id}/checkout`, { method: "POST" });
+    window.location.href = r.checkout_url;
+  } catch (e) { toast(e.message); await refreshAll(); }
+}
+
+// Back from Stripe: /?payment=success | cancelled | refunded | pending
+(function showPaymentResult() {
+  const result = new URLSearchParams(location.search).get("payment");
+  if (!result) return;
+  const messages = {
+    success: "Payment received, your seat is booked! 🎉",
+    cancelled: "Payment cancelled. Your seat stays held for the rest of its 5 minutes.",
+    refunded: "Your hold ran out before the payment finished, so the payment was refunded automatically.",
+    pending: "Payment is still processing. Your booking will update in a moment.",
+  };
+  history.replaceState(null, "", location.pathname);  // so a refresh doesn't show it again
+  setTimeout(() => toast(messages[result] || "Payment finished."), 300);
+  if (result === "pending") setTimeout(refreshAll, 4000);
+})();
 
 async function loadBookings() {
   const box = $("bookings");
@@ -367,9 +445,9 @@ async function loadBookings() {
   live.forEach((b) => {
     const row = document.createElement("div"); row.className = "booking";
     const left = b.hold_expires_at ? Math.max(0, Math.round((new Date(b.hold_expires_at) - Date.now()) / 1000)) : null;
-    row.innerHTML = `<div>Seat <b>${esc(b.seat_label)}</b> <span class="tag ${b.status}">${b.status}${left !== null ? " · " + Math.floor(left / 60) + "m " + (left % 60) + "s" : ""}</span></div>`;
+    row.innerHTML = `<div>Seat <b>${esc(b.seat_label)}</b> <span class="tag ${b.status}">${b.status}${left !== null ? " · " + Math.floor(left / 60) + "m " + (left % 60) + "s" : ""}</span>${b.transaction_id ? `<div class="sub" style="font-size:12px">Txn ${esc(b.transaction_id)}</div>` : ""}</div>`;
     const btns = document.createElement("div"); btns.className = "row";
-    if (b.status === "held") { const c = document.createElement("button"); c.className = "primary"; c.textContent = "Confirm"; c.onclick = () => act(b.id, "confirm"); btns.appendChild(c); }
+    if (b.status === "held") { const c = document.createElement("button"); c.className = "primary"; c.textContent = "Pay " + taka(b.amount_cents); c.onclick = () => openPay(b); btns.appendChild(c); }
     const x = document.createElement("button"); x.textContent = "Cancel"; x.onclick = () => act(b.id, "cancel"); btns.appendChild(x);
     row.appendChild(btns); box.appendChild(row);
   });

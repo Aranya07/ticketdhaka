@@ -15,9 +15,21 @@ from sqlalchemy.orm import Session
 from app.core.cache import Cache
 from app.db import get_db
 from app.deps import require_admin
-from app.models import Booking, BookingStatus, Event, Role, Seat, SeatStatus, User, WaitlistEntry
+from app.models import (
+    Booking,
+    BookingStatus,
+    Event,
+    Payment,
+    PaymentStatus,
+    Role,
+    Seat,
+    SeatStatus,
+    User,
+    WaitlistEntry,
+)
 from app.routers.events import get_cache, notify_change
 from app.schemas import AdminBookingOut, AdminUserOut, RoleUpdate
+from app.services.booking_service import BookingError, refund_payments
 from app.services.event_service import invalidate_event
 
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])
@@ -29,10 +41,9 @@ def _counts(db: Session, column) -> dict[str, int]:
 
 @router.get("/stats")
 def stats(request: Request, db: Session = Depends(get_db), cache: Cache = Depends(get_cache)):
+    # Revenue = money actually collected (refunded and failed payments don't count)
     revenue = db.scalar(
-        select(func.coalesce(func.sum(Seat.price_cents), 0))
-        .join(Booking, Booking.seat_id == Seat.id)
-        .where(Booking.status == BookingStatus.confirmed)
+        select(func.coalesce(func.sum(Payment.amount_cents), 0)).where(Payment.status == PaymentStatus.succeeded)
     )
     return {
         "users": _counts(db, User.role),
@@ -40,6 +51,7 @@ def stats(request: Request, db: Session = Depends(get_db), cache: Cache = Depend
         "seats": _counts(db, Seat.status),
         "bookings": _counts(db, Booking.status),
         "waitlist": db.scalar(select(func.count(WaitlistEntry.id))),
+        "payments": _counts(db, Payment.status),
         "revenue_bdt": (revenue or 0) / 100,
         "cache": cache.stats(),
     }
@@ -94,13 +106,21 @@ def release_seat(seat_id: int, db: Session = Depends(get_db), cache: Cache = Dep
     seat = db.execute(select(Seat).where(Seat.id == seat_id).with_for_update()).scalar_one_or_none()
     if seat is None:
         raise HTTPException(404, "Seat not found")
-    cancelled = db.query(Booking).filter(
+    ids = db.scalars(select(Booking.id).where(
         Booking.seat_id == seat.id, Booking.status.in_([BookingStatus.held, BookingStatus.confirmed])
-    ).update({Booking.status: BookingStatus.cancelled}, synchronize_session=False)
+    )).all()
+    if ids:
+        db.query(Booking).filter(Booking.id.in_(ids)).update({Booking.status: BookingStatus.cancelled},
+                                                             synchronize_session=False)
+    try:
+        refunded = refund_payments(db, ids)
+    except BookingError as e:  # Stripe refund failed: undo everything, the seat stays as it was
+        db.rollback()
+        raise HTTPException(e.status_code, e.detail)
     seat.status, seat.held_by, seat.hold_expires_at = SeatStatus.available, None, None
     db.commit()
     notify_change(cache, seat.event_id, seat.id, "available")
-    return {"seat_id": seat.id, "status": "available", "bookings_cancelled": cancelled}
+    return {"seat_id": seat.id, "status": "available", "bookings_cancelled": len(ids), "payments_refunded": refunded}
 
 
 @router.delete("/events/{event_id}", status_code=204)

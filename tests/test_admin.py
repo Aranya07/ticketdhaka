@@ -1,7 +1,7 @@
 from app.db import SessionLocal
 from app.models import Role, User
 from app.seed import ensure_admin
-from tests.conftest import key, register
+from tests.conftest import PAY, key, register
 
 
 def test_cannot_self_register_as_organizer_or_admin(client):
@@ -29,7 +29,7 @@ def test_admin_stats_bookings_release_and_roles(client, event, attendee):
     ev, seats = event
     admin = register(client, "admin")
     hold = client.post(f"/events/{ev['id']}/seats/{seats[0]['id']}/hold", headers={**attendee, "Idempotency-Key": key()}).json()
-    client.post(f"/bookings/{hold['id']}/confirm", headers=attendee)
+    client.post(f"/bookings/{hold['id']}/confirm", headers=attendee, json=PAY)
 
     stats = client.get("/admin/stats", headers=admin).json()
     assert stats["bookings"]["confirmed"] == 1 and stats["seats"]["booked"] == 1
@@ -39,7 +39,7 @@ def test_admin_stats_bookings_release_and_roles(client, event, attendee):
     assert rows[0]["seat_id"] == seats[0]["id"] and rows[0]["event_title"] == "Test Fest"
 
     r = client.post(f"/admin/seats/{seats[0]['id']}/release", headers=admin)
-    assert r.json()["bookings_cancelled"] == 1
+    assert r.json()["bookings_cancelled"] == 1 and r.json()["payments_refunded"] == 1
     seat_status = {s["id"]: s["status"] for s in client.get(f"/events/{ev['id']}/seats").json()}
     assert seat_status[seats[0]["id"]] == "available"
 

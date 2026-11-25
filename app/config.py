@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     admin_email: str | None = None
     admin_password: str | None = None
 
+    # Stripe (test mode is free: use sk_test_... keys). Leave empty to use the built-in demo gateway.
+    stripe_secret_key: str | None = None
+    stripe_webhook_secret: str | None = None  # whsec_..., from the Stripe dashboard or `stripe listen`
+
 
 @lru_cache
 def get_settings() -> Settings:

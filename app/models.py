@@ -39,6 +39,19 @@ class BookingStatus(str, enum.Enum):
     expired = "expired"
 
 
+class PaymentMethod(str, enum.Enum):
+    bkash = "bkash"
+    nagad = "nagad"
+    card = "card"
+    stripe = "stripe"  # paid on Stripe's hosted Checkout page
+
+
+class PaymentStatus(str, enum.Enum):
+    succeeded = "succeeded"
+    failed = "failed"
+    refunded = "refunded"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -112,6 +125,26 @@ class Booking(Base):
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     seat: Mapped[Seat] = relationship()
+    payments: Mapped[list["Payment"]] = relationship(order_by="Payment.id", passive_deletes=True)
+
+
+class Payment(Base):
+    """One row per payment attempt (failed ones too), so there's an audit trail of every charge."""
+    __tablename__ = "payments"
+    __table_args__ = (Index("ix_payments_booking", "booking_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    booking_id: Mapped[int] = mapped_column(ForeignKey("bookings.id", ondelete="CASCADE"))
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    amount_cents: Mapped[int] = mapped_column(Integer)  # copied from the seat at payment time
+    currency: Mapped[str] = mapped_column(String(3), default="BDT")
+    method: Mapped[PaymentMethod] = mapped_column(Enum(PaymentMethod, name="payment_method"))
+    account_last4: Mapped[str] = mapped_column(String(4))  # never store the full number
+    status: Mapped[PaymentStatus] = mapped_column(Enum(PaymentStatus, name="payment_status"))
+    provider_ref: Mapped[str] = mapped_column(String(40), unique=True)  # the gateway's transaction ID
+    failure_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    refunded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class WaitlistEntry(Base):

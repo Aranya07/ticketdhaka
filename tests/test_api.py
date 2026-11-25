@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 from app.db import SessionLocal
 from app.models import Seat
 from app.services.booking_service import release_expired_holds
-from tests.conftest import key, register
+from tests.conftest import PAY, key, register
 
 
 def test_register_login_me(client):
@@ -46,7 +46,7 @@ def test_hold_confirm_flow(client, event, attendee):
     status = {s["id"]: s["status"] for s in client.get(f"/events/{ev['id']}/seats").json()}
     assert status[seat["id"]] == "held"
 
-    r = client.post(f"/bookings/{booking['id']}/confirm", headers=attendee)
+    r = client.post(f"/bookings/{booking['id']}/confirm", headers=attendee, json=PAY)
     assert r.status_code == 200 and r.json()["status"] == "confirmed"
     assert client.get("/events").json()["items"][0]["available_seats"] == 5
 
@@ -76,7 +76,7 @@ def test_expired_hold_is_released_and_confirm_fails(client, event, attendee):
     with SessionLocal() as db:  # fast-forward time: push the hold into the past
         db.get(Seat, seat_id).hold_expires_at = datetime.now(UTC) - timedelta(seconds=1)
         db.commit()
-    assert client.post(f"/bookings/{b['id']}/confirm", headers=attendee).status_code == 410
+    assert client.post(f"/bookings/{b['id']}/confirm", headers=attendee, json=PAY).status_code == 410
 
     b2 = client.post(f"/events/{ev['id']}/seats/{seat_id}/hold", headers={**attendee, "Idempotency-Key": key()}).json()
     with SessionLocal() as db:

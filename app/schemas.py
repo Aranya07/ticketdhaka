@@ -1,9 +1,10 @@
+import re
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 
-from app.models import BookingStatus, Role, SeatStatus
+from app.models import BookingStatus, PaymentMethod, Role, SeatStatus
 
 
 class RegisterIn(BaseModel):
@@ -82,6 +83,27 @@ class BookingOut(BaseModel):
     created_at: datetime
     confirmed_at: datetime | None
     hold_expires_at: datetime | None
+    amount_cents: int
+    transaction_id: str | None = None  # gateway ref of the successful payment, once paid
+
+
+BD_MOBILE = re.compile(r"^01[3-9]\d{8}$")  # e.g. 01712345678
+CARD_NUMBER = re.compile(r"^\d{16}$")
+
+
+class PaymentIn(BaseModel):
+    method: PaymentMethod
+    account: str = Field(description="bKash/Nagad: 11-digit mobile number. Card: 16-digit card number. "
+                                     "Mock gateway: anything ending in 0000 is declined.")
+
+    @model_validator(mode="after")
+    def check_account(self):
+        self.account = self.account.replace(" ", "").replace("-", "")
+        pattern = CARD_NUMBER if self.method == PaymentMethod.card else BD_MOBILE
+        if not pattern.match(self.account):
+            kind = "a 16-digit card number" if self.method == PaymentMethod.card else "an 11-digit mobile number (01XXXXXXXXX)"
+            raise ValueError(f"account must be {kind}")
+        return self
 
 
 class Page(BaseModel):
