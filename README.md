@@ -5,11 +5,9 @@
 [![CI](https://github.com/Aranya07/ticketdhaka/actions/workflows/ci.yml/badge.svg)](https://github.com/Aranya07/ticketdhaka/actions)
 ![Python](https://img.shields.io/badge/python-3.12-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791) ![Redis](https://img.shields.io/badge/Redis-7-DC382D)
 
-**Live demo:** https://ticketdhaka-lk0v.onrender.com · **API docs:** `/docs` (admin login only)
+**Run it:** `docker compose up --build`, then open http://localhost:8080 · **API docs:** `/docs` (admin login only)
 
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Aranya07/ticketdhaka)
-
-> Open the demo in two browser tabs and click the same seat. One tab gets it; the other gets a 409, and its seat map updates live over WebSocket.
+> Open it in two browser tabs and click the same seat. One tab gets it; the other gets a 409, and its seat map updates live over WebSocket.
 
 ---
 
@@ -30,7 +28,7 @@ Dhaka has a packed events scene (Shilpakala, ICCB, Mirpur stadium, rooftop gigs 
 - **Live seat map** over WebSockets
 - **JWT auth** with access and refresh tokens, and role-based access (attendee / organizer / admin)
 - **Admin dashboard** (`/admin`): live stats, every booking, seat release, event management, role management
-- **Dockerized**: production on Render runs the same Docker image you build locally (`render.yaml` uses the Docker runtime)
+- **Dockerized**: one `docker compose up --build` runs the whole stack (API image + nginx + Postgres + Redis) on localhost
 - Structured JSON logs with request IDs, a `/health` endpoint, nginx reverse proxy config, Docker Compose, GitHub Actions CI
 
 ## Results
@@ -140,6 +138,6 @@ aamarPay has no refund API: when a paid booking is cancelled, or a payment arriv
 
 ## Tech
 
-Python 3.12 · FastAPI · SQLAlchemy 2 · PostgreSQL 16 · Redis 7 · PyJWT + bcrypt · WebSockets · pytest · k6 · Docker · nginx · GitHub Actions · Render
+Python 3.12 · FastAPI · SQLAlchemy 2 · PostgreSQL 16 · Redis 7 · PyJWT + bcrypt · WebSockets · pytest · k6 · Docker · nginx · GitHub Actions
 
 <sub>Formerly named SeatLock. Renamed to avoid clashing with an unrelated product.</sub>

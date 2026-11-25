@@ -43,7 +43,7 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     s = Settings()
-    # Render/Heroku style URLs -> SQLAlchemy psycopg3 driver
+    # postgres:// style URLs (as hosting providers give them) -> SQLAlchemy psycopg3 driver
     if s.database_url.startswith("postgres://"):
         s.database_url = s.database_url.replace("postgres://", "postgresql+psycopg://", 1)
     elif s.database_url.startswith("postgresql://"):
