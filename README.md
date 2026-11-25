@@ -29,6 +29,7 @@ Dhaka has a packed events scene (Shilpakala, ICCB, Mirpur stadium, rooftop gigs 
 - **Live seat map** over WebSockets
 - **JWT auth** with access and refresh tokens, and role-based access (attendee / organizer / admin)
 - **Admin dashboard** (`/admin`): live stats, every booking, seat release, event management, role management
+- **Dockerized**: production on Render runs the same Docker image you build locally (`render.yaml` uses the Docker runtime)
 - Structured JSON logs with request IDs, a `/health` endpoint, nginx reverse proxy config, Docker Compose, GitHub Actions CI
 
 ## Results

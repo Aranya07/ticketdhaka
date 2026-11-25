@@ -1,0 +1,14 @@
+# Keep the Docker build context small and free of secrets. The image only needs requirements.txt and app/.
+.git
+.github
+.venv
+venv
+.env
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+.claude
+CLAUDE.md
+tests
+bench
