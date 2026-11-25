@@ -6,7 +6,8 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import text
 
@@ -14,6 +15,7 @@ from app.config import get_settings
 from app.core.cache import build_cache
 from app.core.rate_limiter import TokenBucketLimiter
 from app.db import Base, SessionLocal, engine
+from app.deps import require_docs_admin
 from app.realtime import hub
 from app.routers import admin, auth, bookings, events
 from app.services import booking_service, event_service
@@ -102,9 +104,14 @@ app = FastAPI(
     description="Concurrency-safe event ticket booking API. No double-booking, even under load.",
     version="1.0.0",
     lifespan=lifespan,
+    # FastAPI's built-in docs are public. Turn them off and serve our own, admin-only versions below.
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
 limiter = TokenBucketLimiter(settings.rate_limit_capacity, settings.rate_limit_refill_per_sec)
-EXEMPT = ("/health", "/docs", "/openapi.json", "/static", "/ws")
+# /docs and /openapi.json are NOT exempt: they take a password now, so they're rate limited against guessing
+EXEMPT = ("/health", "/static", "/ws")
 
 
 @app.middleware("http")
@@ -169,3 +176,13 @@ def index():
 @app.get("/admin", include_in_schema=False)
 def admin_page():
     return FileResponse(STATIC / "admin.html")
+
+
+@app.get("/openapi.json", include_in_schema=False, dependencies=[Depends(require_docs_admin)])
+def openapi_schema():
+    return JSONResponse(app.openapi())
+
+
+@app.get("/docs", include_in_schema=False, dependencies=[Depends(require_docs_admin)])
+def api_docs():
+    return get_swagger_ui_html(openapi_url="/openapi.json", title="TicketDhaka API docs (admin)")
