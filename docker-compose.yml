@@ -5,6 +5,11 @@ services:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/ticketdhaka
       REDIS_URL: redis://redis:6379/0
       JWT_SECRET: local-dev-secret-change-me-32-bytes-min
+      # ${VAR:-default} values come from your shell or the .env file next to this one
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@local.dev}          # admin login for /admin and /docs
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin12345}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}             # empty = demo payment gateway
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
     depends_on:
       db: { condition: service_healthy }
       redis: { condition: service_started }
@@ -20,7 +25,9 @@ services:
     environment:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: ticketdhaka
-    ports: ["5432:5432"]   # exposed so the app/tests running on your machine can connect
+    # exposed so the app/tests running on your machine can connect. DB_PORT changes the host side,
+    # e.g. DB_PORT=5433 when a locally installed PostgreSQL already uses 5432.
+    ports: ["${DB_PORT:-5432}:5432"]
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./deploy/init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql:ro
@@ -31,7 +38,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports: ["6379:6379"]
+    ports: ["${REDIS_PORT:-6379}:6379"]
 
 volumes:
   pgdata:
